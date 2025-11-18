@@ -1,7 +1,6 @@
 # modules/processor.py
 import pandas as pd
 import re
-from datetime import datetime
 
 def split_barcodes(val):
     if pd.isna(val):
@@ -30,7 +29,7 @@ def process_combined_sheet(uploaded_files, params):
     for f in uploaded_files:
         if f is None:
             continue
-        name = f.name.lower()
+        name = getattr(f, "name", "").lower()
         try:
             if name.endswith('.csv'):
                 df = pd.read_csv(f, dtype=str, low_memory=False)
@@ -55,11 +54,12 @@ def process_combined_sheet(uploaded_files, params):
     # Normalize numeric
     df['SystemQty'] = pd.to_numeric(df['available_quantity'], errors='coerce').fillna(0).astype(int)
 
-    # default display behavior: Display = min(system, DISPLAY_TARGET)
+    # params
     DISPLAY_TARGET = int(params.get('DISPLAY_TARGET', 1))
     BACKSTOCK_SAFETY = int(params.get('BACKSTOCK_SAFETY', 2))
     MIN_TRANSFER_QTY = int(params.get('MIN_TRANSFER_QTY', 1))
 
+    # compute display/backstock/need/surplus
     df['DisplayQty'] = df['SystemQty'].apply(lambda x: min(x, DISPLAY_TARGET))
     df['Backstock'] = df['SystemQty'] - df['DisplayQty']
     df['Need'] = df['DisplayQty'].apply(lambda x: max(DISPLAY_TARGET - x, 0))
@@ -73,9 +73,9 @@ def process_combined_sheet(uploaded_files, params):
             rows.append({
                 'Branch': r.get('branch_name', ''),
                 'Product name': r.get('name_en', ''),
-                'Brand': r.get('brand', ''),
-                'Sale Price': r.get('sale_price', ''),
-                'Barcode Raw': '',
+                'Brand': r.get('brand', '') if 'brand' in r else '',
+                'Sale Price': r.get('sale_price', '') if 'sale_price' in r else '',
+                'Barcodes': '',
                 'Key': '',
                 'System Qty': int(r['SystemQty']),
                 'Display Qty': int(r['DisplayQty']),
@@ -88,9 +88,9 @@ def process_combined_sheet(uploaded_files, params):
                 rows.append({
                     'Branch': r.get('branch_name', ''),
                     'Product name': r.get('name_en', ''),
-                    'Brand': r.get('brand', ''),
-                    'Sale Price': r.get('sale_price', ''),
-                    'Barcode Raw': bc,
+                    'Brand': r.get('brand', '') if 'brand' in r else '',
+                    'Sale Price': r.get('sale_price', '') if 'sale_price' in r else '',
+                    'Barcodes': bc,
                     'Key': normalize_key(bc),
                     'System Qty': int(r['SystemQty']),
                     'Display Qty': int(r['DisplayQty']),
@@ -101,11 +101,14 @@ def process_combined_sheet(uploaded_files, params):
 
     rec = pd.DataFrame(rows)
 
+    if rec.empty:
+        return pd.DataFrame(), pd.DataFrame()
+
     # aggregate per Key x Branch
     agg = rec.groupby(['Key', 'Branch'], as_index=False).agg({
         'Product name': 'first',
         'Brand': 'first',
-        'Barcode Raw': lambda x: ','.join(sorted(set(x.dropna().astype(str)))),
+        'Barcodes': lambda x: ','.join(sorted(set(x.dropna().astype(str)))),
         'Sale Price': 'first',
         'System Qty': 'sum',
         'Display Qty': 'sum',
@@ -142,13 +145,17 @@ def process_combined_sheet(uploaded_files, params):
     if not transfers_df.empty:
         for _, t in transfers_df.iterrows():
             mask_src = (agg['Key'] == t['Key']) & (agg['Branch'] == t['From'])
-            agg.loc[mask_src, 'Suggested Action'] = agg.loc[mask_src, 'Suggested Action'].apply(lambda x: (x + f"Transfer to {t['To']} x{t['Qty']}; ") if str(x) != '' else (f"Transfer to {t['To']} x{t['Qty']}; "))
+            agg.loc[mask_src, 'Suggested Action'] = agg.loc[mask_src, 'Suggested Action'].apply(
+                lambda x: (x + f"Transfer to {t['To']} x{t['Qty']}; ") if str(x) != '' else (f"Transfer to {t['To']} x{t['Qty']}; "))
             agg.loc[mask_src, 'Suggested Transfer Qty'] += int(t['Qty'])
-            agg.loc[mask_src, 'Suggested Partner'] = agg.loc[mask_src, 'Suggested Partner'].apply(lambda x: (x + f"{t['To']},") if str(x) != '' else t['To'])
+            agg.loc[mask_src, 'Suggested Partner'] = agg.loc[mask_src, 'Suggested Partner'].apply(
+                lambda x: (x + f"{t['To']},") if str(x) != '' else t['To'])
             mask_dst = (agg['Key'] == t['Key']) & (agg['Branch'] == t['To'])
-            agg.loc[mask_dst, 'Suggested Action'] = agg.loc[mask_dst, 'Suggested Action'].apply(lambda x: (x + f"Receive from {t['From']} x{t['Qty']}; ") if str(x) != '' else (f"Receive from {t['From']} x{t['Qty']}; "))
+            agg.loc[mask_dst, 'Suggested Action'] = agg.loc[mask_dst, 'Suggested Action'].apply(
+                lambda x: (x + f"Receive from {t['From']} x{t['Qty']}; ") if str(x) != '' else (f"Receive from {t['From']} x{t['Qty']}; "))
             agg.loc[mask_dst, 'Suggested Transfer Qty'] += int(t['Qty'])
-            agg.loc[mask_dst, 'Suggested Partner'] = agg.loc[mask_dst, 'Suggested Partner'].apply(lambda x: (x + f"{t['From']},") if str(x) != '' else t['From'])
+            agg.loc[mask_dst, 'Suggested Partner'] = agg.loc[mask_dst, 'Suggested Partner'].apply(
+                lambda x: (x + f"{t['From']},") if str(x) != '' else t['From'])
 
     def unified_flag(row):
         sa = str(row.get('Suggested Action', '')).strip()
@@ -162,9 +169,13 @@ def process_combined_sheet(uploaded_files, params):
 
     agg['Sku Flag'] = agg.apply(unified_flag, axis=1)
 
-    # final ordering
-    final_cols = ['Product name', 'Barcode Raw', 'Sale Price', 'Branch', 'System Qty', 'Display Qty', 'Backstock', 'Need', 'Surplus', 'Sku Flag', 'Suggested Transfer Qty', 'Suggested Partner']
-    final = agg.rename(columns={'Barcode Raw': 'Barcodes', 'Sale Price': 'Sale Price', 'System Qty': 'System Qty', 'Display Qty': 'Display Qty'})
+    # final ordering - ensure columns exist and use 'Barcodes' (not Barcode Raw)
+    final_cols = ['Product name', 'Barcodes', 'Sale Price', 'Branch', 'System Qty', 'Display Qty', 'Backstock', 'Need', 'Surplus', 'Sku Flag', 'Suggested Transfer Qty', 'Suggested Partner']
+    # rename if necessary (agg already has 'Barcodes')
+    final = agg.copy()
+    for c in final_cols:
+        if c not in final.columns:
+            final[c] = '' if final[c].dtype == object else 0
     final = final[final_cols].copy()
 
     return final, transfers_df
