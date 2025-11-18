@@ -6,12 +6,20 @@ from datetime import datetime
 
 def render_ui(process_fn):
     st.header('Upload combined sheet (or multiple branch files)')
-    st.markdown('Upload one combined CSV/XLSX that includes columns: `name_en, branch_name, barcodes, available_quantity, sale_price (optional)`.')
-    uploaded = st.file_uploader('Upload CSV/XLSX files (multiple allowed)', type=['csv','xls','xlsx'], accept_multiple_files=True)
+    st.markdown(
+        'Upload one combined CSV/XLSX that includes columns: '
+        '`name_en, branch_name, barcodes, available_quantity, sale_price (optional)`.'
+    )
+
+    uploaded = st.file_uploader(
+        'Upload CSV/XLSX files (multiple allowed)',
+        type=['csv', 'xls', 'xlsx'],
+        accept_multiple_files=True
+    )
 
     st.markdown('---')
     st.subheader('Parameters')
-    cols = st.columns([2,2,2])
+    cols = st.columns([2, 2, 2])
     with cols[0]:
         DISPLAY_TARGET = st.number_input('Display target per SKU', min_value=0, value=1, step=1)
     with cols[1]:
@@ -24,11 +32,13 @@ def render_ui(process_fn):
         if not uploaded:
             st.error('Please upload at least one file.')
             return
+
         params = {
-            'DISPLAY_TARGET': DISPLAY_TARGET,
-            'BACKSTOCK_SAFETY': BACKSTOCK_SAFETY,
-            'MIN_TRANSFER_QTY': MIN_TRANSFER_QTY
+            'DISPLAY_TARGET': int(DISPLAY_TARGET),
+            'BACKSTOCK_SAFETY': int(BACKSTOCK_SAFETY),
+            'MIN_TRANSFER_QTY': int(MIN_TRANSFER_QTY)
         }
+
         try:
             final, transfers = process_fn(uploaded, params)
         except Exception as e:
@@ -48,7 +58,11 @@ def render_ui(process_fn):
             st.dataframe(transfers, use_container_width=True)
 
         # Downloads
-        csv_bytes = final.to_csv(index=False).encode('utf-8')
+        try:
+            csv_bytes = final.to_csv(index=False).encode('utf-8')
+        except Exception:
+            csv_bytes = final.to_csv(index=False).encode()
+
         with io.BytesIO() as buffer:
             with pd.ExcelWriter(buffer, engine='openpyxl') as writer:
                 final.to_excel(writer, index=False, sheet_name='BRANCH_SUGGESTIONS')
@@ -56,8 +70,14 @@ def render_ui(process_fn):
                     transfers.to_excel(writer, index=False, sheet_name='TRANSFERS')
             excel_bytes = buffer.getvalue()
 
-        st.download_button('Download report — CSV', data=csv_bytes, file_name=f'branch_transfer_report_{datetime.utcnow().strftime(\"%Y%m%dT%H%M%SZ\")}.csv')
-        st.download_button('Download report — Excel', data=excel_bytes, file_name=f'branch_transfer_report_{datetime.utcnow().strftime(\"%Y%m%dT%H%M%SZ\")}.xlsx')
+        csv_name = 'branch_transfer_report_{}.csv'.format(datetime.utcnow().strftime('%Y%m%dT%H%M%SZ'))
+        xlsx_name = 'branch_transfer_report_{}.xlsx'.format(datetime.utcnow().strftime('%Y%m%dT%H%M%SZ'))
+
+        st.download_button('Download report — CSV', data=csv_bytes, file_name=csv_name)
+        st.download_button('Download report — Excel', data=excel_bytes, file_name=xlsx_name)
 
         st.markdown('---')
-        st.info('If column names differ in your files, rename or map them before uploading. Expected columns: name_en, branch_name, barcodes, available_quantity, sale_price (optional)')
+        st.info(
+            'If column names differ in your files, rename or map them before uploading. '
+            'Expected columns: name_en, branch_name, barcodes, available_quantity, sale_price (optional)'
+        )
