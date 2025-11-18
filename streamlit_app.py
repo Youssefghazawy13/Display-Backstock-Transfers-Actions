@@ -5,7 +5,7 @@ from modules.ui import render_ui
 
 st.set_page_config(page_title="Nard Transfer Assistant", layout="wide")
 
-st.title("Nard Transfer Assistant")
+st.title("Slot-X Stock Display,Storage,Transfer Assistant")
 st.markdown("Upload a combined stock sheet (or multiple branch files). The app computes display/backstock/need/surplus per branch and suggests transfers.")
 
 render_ui(process_combined_sheet)
